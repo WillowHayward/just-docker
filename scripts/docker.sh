@@ -14,8 +14,13 @@ fi
 STACK_DIR="$ROOT/$STACK"
 COMPOSE_FILE="$STACK_DIR/compose.yml"
 
-SECRETS_DIR="$STACK_DIR/secrets"
+ENCRYPTED_DIR="$STACK_DIR/secrets"
 DECRYPTED_DIR="$STACK_DIR/.decrypted"
+
+case "$COMMAND" in
+    check|config|up|run|foreground|fg|down|restart|pull|logs) ;;
+    *) echo "Unknown command: $COMMAND" >&2; exit 1 ;;
+esac
 
 if [[ ! -d "$STACK_DIR" ]]; then
     echo "Unknown stack: $STACK"
@@ -39,11 +44,12 @@ load_env() {
 }
 
 decrypt_secrets() {
+    REMOVE_SECRETS=true
     rm -rf "$DECRYPTED_DIR"
     mkdir -p "$DECRYPTED_DIR"
     chmod 700 "$DECRYPTED_DIR"
 
-    [[ -d "$SECRETS_DIR" ]] || return 0
+    [[ -d "$ENCRYPTED_DIR" ]] || return 0
 
     while IFS= read -r -d '' source; do
         filename="$(basename "$source")"
@@ -54,7 +60,7 @@ decrypt_secrets() {
         sops --decrypt "$source" > "$target"
         chmod 600 "$target"
     done < <(
-        find "$SECRETS_DIR" \
+        find "$ENCRYPTED_DIR" \
             -maxdepth 1 \
             -type f \
             -name '*.sops.*' \
@@ -73,57 +79,125 @@ compose() {
     )
 }
 
+run_hook() {
+    local hook="$STACK_DIR/hooks/$1"
+    [[ -e "$hook" || -L "$hook" ]] || return 0
+    if [[ ! -f "$hook" || ! -x "$hook" ]]; then
+        echo "Hook is not an executable file: $hook" >&2
+        return 1
+    fi
+    echo "Running hook: $STACK/hooks/$1" >&2
+    (cd "$STACK_DIR" && "$hook")
+}
+
+cleanup() {
+    local status=$? cleanup_status=0
+    trap - EXIT
+    # Disable errexit so a failing hook cannot prevent secret removal.
+    set +e
+    if [[ "$LIFECYCLE" == true ]]; then
+        run_hook cleanup
+        cleanup_status=$?
+        if (( cleanup_status != 0 )); then
+            echo "Cleanup hook failed (status $cleanup_status)" >&2
+        fi
+    fi
+    if [[ "$REMOVE_SECRETS" == true ]]; then
+        rm -rf "$DECRYPTED_DIR"
+        local removal_status=$?
+        if (( removal_status != 0 )); then
+            echo "Failed to remove decrypted secrets: $DECRYPTED_DIR" >&2
+            (( cleanup_status != 0 )) || cleanup_status=$removal_status
+        fi
+    fi
+    (( status != 0 )) || status=$cleanup_status
+    exit "$status"
+}
+
+start_stack() {
+    run_hook pre-up
+    compose config --quiet
+    compose up -d
+    # Containers may need these files even if a later hook fails.
+    REMOVE_SECRETS=false
+    run_hook post-up
+}
+
+stop_stack() {
+    run_hook pre-down
+    compose config --quiet
+    compose down
+    REMOVE_SECRETS=true
+    run_hook post-down
+}
+
+load_env
+export SECRETS_DIR="$DECRYPTED_DIR"
+command -v docker >/dev/null || { echo "Docker is not available" >&2; exit 1; }
+compose version >/dev/null || { echo "Docker Compose is not available" >&2; exit 1; }
+
+LIFECYCLE=false
+REMOVE_SECRETS=false
+case "$COMMAND" in
+    up|down|restart) LIFECYCLE=true ;;
+esac
+# Arm cleanup before hooks or decryption can leave partially prepared state.
+case "$COMMAND" in
+    check|config|up|run|foreground|fg|down|restart)
+        trap cleanup EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        ;;
+esac
+if [[ "$LIFECYCLE" == true ]]; then
+    run_hook preflight
+fi
+
 case "$COMMAND" in
     check)
-        load_env
         decrypt_secrets
-        compose config -q
+        compose config --quiet
+        REMOVE_SECRETS=false
         ;;
 
     config)
-        load_env
         decrypt_secrets
         compose config
+        REMOVE_SECRETS=false
         ;;
     up)
-        load_env
         decrypt_secrets
-        compose up -d
+        start_stack
         ;;
 
     run|foreground|fg)
-        load_env
         decrypt_secrets
+        compose config --quiet
         compose up
+        REMOVE_SECRETS=false
         ;;
 
     down)
-        load_env
-        compose down
-        rm -rf "$DECRYPTED_DIR"
+        stop_stack
         ;;
 
     restart)
-        load_env
-        compose down
+        run_hook pre-restart
+        stop_stack
         decrypt_secrets
-        compose up -d
+        start_stack
+        run_hook post-restart
         ;;
 
     pull)
-        load_env
+        compose config --quiet
         compose pull
         ;;
 
     logs)
-        load_env
+        compose config --quiet
         shift 2
         compose logs -f "$@"
         ;;
 
-    *)
-        echo "Unknown command: $COMMAND"
-        echo "Usage: $0 <stack> <check|config|up|run|down|restart|pull|logs>"
-        exit 1
-        ;;
 esac

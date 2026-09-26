@@ -21,15 +21,21 @@ set -euo pipefail
 [[ "$SECRETS_DIR" == "$PWD/.decrypted" ]]
 [[ "$1" == compose && "$2" == --file && "$3" == "$PWD/compose.yml" ]]
 shift 3
+[[ "$1" == version ]] && exit 0
+[[ "$*" == "config --quiet" ]] && exit 0
 printf '%s\n' "$@"
 DOCKER
 chmod +x "$tmp/bin/docker"
 export PATH="$tmp/bin:$PATH" IMPORT_TEST_ROOT="$consumer"
 cd "$consumer/test stack"
-[[ "$(just check 'test stack')" == $'config\n-q' ]]
-[[ "$(just logs 'test stack' --tail 50)" == $'logs\n-f\n--tail\n50' ]]
-[[ "$(just pull 'test stack')" == pull ]]
-[[ "$(just down 'test stack')" == down ]]
+output="$(just check 'test stack')"
+[[ "$output" == "" ]]
+output="$(just logs 'test stack' --tail 50)"
+[[ "$output" == $'logs\n-f\n--tail\n50' ]]
+output="$(just pull 'test stack')"
+[[ "$output" == pull ]]
+output="$(just down 'test stack')"
+[[ "$output" == down ]]
 [[ ! -d .decrypted ]]
 if just check missing > "$tmp/missing.log" 2>&1; then
     echo 'Expected a missing stack to fail' >&2
