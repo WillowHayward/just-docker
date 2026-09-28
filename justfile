@@ -34,6 +34,9 @@ pull stack:
 logs stack *args:
     JUST_DOCKER_ROOT={{quote(just_docker_root)}} {{quote(just_docker_script)}} {{quote(stack)}} logs {{args}}
 
+exec stack *args:
+    JUST_DOCKER_ROOT={{quote(just_docker_root)}} {{quote(just_docker_script)}} {{quote(stack)}} exec {{args}}
+
 # Apply the consumer's SOPS recipient rules to encrypted secrets
 update-keys:
     cd {{quote(just_docker_root)}} && find . -type d \( -name .git -o -name .decrypted \) -prune -o -type f -path '*/secrets/*.sops.*' -exec sops updatekeys -y {} \;
