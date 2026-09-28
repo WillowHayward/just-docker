@@ -35,7 +35,10 @@ logs stack *args:
     JUST_DOCKER_ROOT={{quote(just_docker_root)}} {{quote(just_docker_script)}} {{quote(stack)}} logs {{args}}
 
 exec stack *args:
-    JUST_DOCKER_ROOT={{quote(just_docker_root)}} {{quote(just_docker_script)}} {{quote(stack)}} exec {{args}}
+    just_docker_root={{quote(just_docker_root)}} {{quote(just_docker_script)}} {{quote(stack)}} exec {{args}}
+
+compose stack *args:
+    just_docker_root={{quote(just_docker_root)}} {{quote(just_docker_script)}} {{quote(stack)}} compose {{args}}
 
 # Apply the consumer's SOPS recipient rules to encrypted secrets
 update-keys:
